@@ -1,0 +1,64 @@
+{
+  "name": "Website Change Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 24 }]
+        }
+      },
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst content = $input.first().json.data;\nconst hash = crypto.createHash('md5').update(content).digest('hex');\nreturn [{ json: { hash, url: $input.first().json.url, name: $input.first().json.name } }];"
+      },
+      "name": "Hash Content",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.hash }}",
+              "operation": "notEqual",
+              "value2": "={{ $node['Read Previous Hash'].json.hash }}"
+            }
+          ]
+        }
+      },
+      "name": "Changed?",
+      "type": "n8n-nodes-base.if",
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#website-alerts",
+        "text": "🔔 Website Changed: {{ $json.name }}\n{{ $json.url }}"
+      },
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "position": [1050, 200]
+    }
+  ],
+  "connections": {
+    "Daily Trigger": { "main": [[{ "node": "Fetch Page", "type": "main", "index": 0 }]] },
+    "Fetch Page": { "main": [[{ "node": "Hash Content", "type": "main", "index": 0 }]] },
+    "Hash Content": { "main": [[{ "node": "Changed?", "type": "main", "index": 0 }]] },
+    "Changed?": { "main": [[{ "node": "Slack Alert", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
