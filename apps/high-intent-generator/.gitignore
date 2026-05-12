@@ -1,0 +1,15 @@
+node_modules
+.next
+tsconfig.tsbuildinfo
+next-env.d.ts
+.env
+.env.local
+.env.production
+.vercel
+*.log
+.DS_Store
+.turbo
+out
+dist
+
+.vercel
