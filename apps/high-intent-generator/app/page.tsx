@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import ProgressBar from "@/components/ProgressBar";
 import { CampaignCard } from "@/components/CampaignCard";
-import GateForm from "@/components/GateForm";
 import LoadingState from "@/components/LoadingState";
 import ErrorState from "@/components/ErrorState";
 import Atmosphere from "@/components/Atmosphere";
@@ -44,22 +44,36 @@ const STEP_MESSAGES: Record<LoadingStep, string[]> = {
 };
 
 interface FormErrors {
+  fullName?: string;
   websiteUrl?: string;
   companyName?: string;
   userEmail?: string;
+  phone?: string;
+  selectedIds?: string;
 }
 
 export default function Home() {
+  const router = useRouter();
+
+  // Form fields
+  const [fullName, setFullName] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
 
+  // Generation state
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState<LoadingStep>("scraping");
   const [companyIntel, setCompanyIntel] = useState<CompanyIntel | null>(null);
+  const [researchIntel, setResearchIntel] = useState<ResearchIntel | null>(null);
   const [campaigns, setCampaigns] = useState<SignalCampaign[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Campaign selection
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [unlocking, setUnlocking] = useState(false);
 
   useEffect(() => {
     const existing = loadState();
@@ -75,10 +89,12 @@ export default function Home() {
 
   const validate = (): FormErrors => {
     const next: FormErrors = {};
+    if (!fullName.trim()) next.fullName = "Full name is required";
     if (!websiteUrl.trim()) next.websiteUrl = "Website URL is required";
     if (!companyName.trim()) next.companyName = "Company name is required";
     if (!userEmail.trim()) next.userEmail = "Email is required";
     else if (!isValidEmail(userEmail)) next.userEmail = "Enter a valid email";
+    if (!phone.trim()) next.phone = "Phone number is required";
     return next;
   };
 
@@ -92,11 +108,11 @@ export default function Home() {
     setError(null);
     setCampaigns([]);
     setCompanyIntel(null);
+    setSelectedIds([]);
 
     try {
       const url = normalizeUrl(websiteUrl);
 
-      // Step 1: Scrape website
       setLoadingStep("scraping");
       const scrapeRes = await fetch("/api/scrape", {
         method: "POST",
@@ -105,33 +121,23 @@ export default function Home() {
       });
       if (!scrapeRes.ok) {
         const { error: msg } = await scrapeRes.json().catch(() => ({}));
-        throw new Error(
-          msg || "We had trouble scraping that URL. Try your homepage URL.",
-        );
+        throw new Error(msg || "We had trouble scraping that URL. Try your homepage URL.");
       }
-      const { companyIntel: intel } = (await scrapeRes.json()) as {
-        companyIntel: CompanyIntel;
-      };
+      const { companyIntel: intel } = (await scrapeRes.json()) as { companyIntel: CompanyIntel };
 
-      // Step 2: Research market
       setLoadingStep("researching");
-      const researchPromise = fetch("/api/research", {
+      const research = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ companyIntel: intel }),
       })
         .then(async (r) => {
           if (!r.ok) return null;
-          const { researchIntel } = (await r.json()) as {
-            researchIntel: ResearchIntel;
-          };
+          const { researchIntel } = (await r.json()) as { researchIntel: ResearchIntel };
           return researchIntel;
         })
         .catch(() => null);
 
-      const research = await researchPromise;
-
-      // Step 3: Generate campaigns
       setLoadingStep("generating");
       const campaignsRes = await fetch("/api/generate-campaigns", {
         method: "POST",
@@ -142,11 +148,10 @@ export default function Home() {
         const { error: msg } = await campaignsRes.json().catch(() => ({}));
         throw new Error(msg || "Generation timed out. Please try again.");
       }
-      const { campaigns: generated } = (await campaignsRes.json()) as {
-        campaigns: SignalCampaign[];
-      };
+      const { campaigns: generated } = (await campaignsRes.json()) as { campaigns: SignalCampaign[] };
 
       setCompanyIntel(intel);
+      setResearchIntel(research);
       setCampaigns(generated);
 
       saveState({
@@ -166,8 +171,46 @@ export default function Home() {
     }
   };
 
-  const handleRetry = () => {
-    setError(null);
+  const toggleCampaign = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleUnlock = async () => {
+    if (selectedIds.length === 0) {
+      setErrors({ selectedIds: "Select at least 1 signal to unlock" });
+      return;
+    }
+    setErrors({});
+    setUnlocking(true);
+
+    const selectedCampaigns = campaigns.filter((c) => selectedIds.includes(c.id));
+    const leadCapture = {
+      name: fullName.trim(),
+      email: userEmail.trim(),
+      phone: phone.trim(),
+      company: companyName.trim(),
+    };
+
+    fetch("/api/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadCapture, companyIntel, campaigns: selectedCampaigns }),
+    }).catch(() => {});
+
+    const existing = loadState() ?? {};
+    saveState({
+      ...existing,
+      leadCapture,
+      selectedCampaigns,
+      campaigns,
+      companyIntel: companyIntel ?? undefined,
+      researchIntel: researchIntel ?? undefined,
+      stage: 2,
+    });
+
+    router.push("/unlocked");
   };
 
   return (
@@ -185,42 +228,52 @@ export default function Home() {
             5 high-intent campaigns.{" "}
             <em className="bl-serif text-accent-light">Built for your ICP.</em>
           </h1>
-          <p
-            className="text-text-secondary max-w-[680px]"
-            style={{ fontSize: 17, lineHeight: 1.6 }}
-          >
+          <p className="text-text-secondary max-w-[680px]" style={{ fontSize: 17, lineHeight: 1.6 }}>
             We scrape your website, scan buying signals in your market, and surface the 5 intent
             triggers most likely to convert — with step-by-step playbooks and outreach scripts.
           </p>
         </header>
 
         {!loading && campaigns.length === 0 && !error && (
-          <form
-            onSubmit={handleGenerate}
-            className="bl-glass-card p-7 md:p-8 space-y-5 max-w-2xl"
-          >
+          <form onSubmit={handleGenerate} className="bl-glass-card p-7 md:p-8 space-y-5 max-w-2xl">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field
+                label="Full Name"
+                value={fullName}
+                onChange={setFullName}
+                placeholder="Jane Smith"
+                error={errors.fullName}
+              />
+              <Field
+                label="Company Name"
+                value={companyName}
+                onChange={setCompanyName}
+                placeholder="Acme Corp"
+                error={errors.companyName}
+              />
+              <Field
+                label="Work Email"
+                value={userEmail}
+                onChange={setUserEmail}
+                placeholder="jane@acme.com"
+                error={errors.userEmail}
+                type="email"
+              />
+              <Field
+                label="Phone Number"
+                value={phone}
+                onChange={setPhone}
+                placeholder="+1 (555) 000-0000"
+                error={errors.phone}
+                type="tel"
+              />
+            </div>
             <Field
               label="Your Website"
               value={websiteUrl}
               onChange={setWebsiteUrl}
               placeholder="https://yourcompany.com"
               error={errors.websiteUrl}
-            />
-            <Field
-              label="Company Name"
-              value={companyName}
-              onChange={setCompanyName}
-              placeholder="Acme Corp"
-              error={errors.companyName}
-            />
-            <Field
-              label="Your Email"
-              value={userEmail}
-              onChange={setUserEmail}
-              placeholder="you@company.com"
-              error={errors.userEmail}
-              type="email"
-              hint="So we can send your results."
             />
             <button
               type="submit"
@@ -239,16 +292,14 @@ export default function Home() {
 
         {error && !loading && (
           <div className="max-w-2xl">
-            <ErrorState message={error} onRetry={handleRetry} />
+            <ErrorState message={error} onRetry={() => setError(null)} />
           </div>
         )}
 
         {!loading && campaigns.length > 0 && companyIntel && (
           <>
             <div className="mb-8">
-              <div className="bl-eyebrow-muted mb-3">
-                {companyIntel.industryVertical}
-              </div>
+              <div className="bl-eyebrow-muted mb-3">{companyIntel.industryVertical}</div>
               <h2
                 className="text-3xl md:text-[44px]"
                 style={{
@@ -260,44 +311,44 @@ export default function Home() {
                   color: "var(--color-text-primary)",
                 }}
               >
-                5 high-intent signal campaigns.
+                Your 5 high-intent signal campaigns.
               </h2>
+              <p className="text-text-tertiary text-sm mt-3">
+                Select the campaigns you want full playbooks for — you can choose all 5.
+              </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-16">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-8">
               {campaigns.map((c, i) => (
-                <CampaignCard key={c.id} campaign={c} index={i} />
+                <CampaignCard
+                  key={c.id}
+                  campaign={c}
+                  index={i}
+                  selected={selectedIds.includes(c.id)}
+                  onToggle={() => toggleCampaign(c.id)}
+                />
               ))}
             </div>
 
-            <div className="border-t border-border pt-12 mb-8">
-              <div className="max-w-2xl mb-6">
-                <div className="bl-eyebrow mb-4">UNLOCK</div>
-                <h2
-                  className="text-3xl md:text-[44px] mb-4"
-                  style={{
-                    fontFamily: "var(--font-serif)",
-                    fontStyle: "italic",
-                    fontWeight: 400,
-                    letterSpacing: "-1.2px",
-                    lineHeight: 1.05,
-                    color: "var(--color-text-primary)",
-                  }}
-                >
-                  Get the full playbooks.
-                </h2>
-                <p className="text-text-secondary" style={{ fontSize: 17, lineHeight: 1.6 }}>
-                  Select 3 signals. Get data sourcing steps, list-building fields for AI Ark +
-                  Apollo, and signal-triggered outreach scripts.
-                </p>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-6 border-t border-border">
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[11px] uppercase tracking-wider text-text-tertiary">
+                  {selectedIds.length === 0
+                    ? "Select at least 1 campaign"
+                    : `${selectedIds.length} of ${campaigns.length} selected`}
+                </span>
+                {errors.selectedIds && (
+                  <span className="text-danger text-xs">{errors.selectedIds}</span>
+                )}
               </div>
-
-              <GateForm
-                campaigns={campaigns}
-                companyIntel={companyIntel}
-                defaultCompanyName={companyName}
-                defaultEmail={userEmail}
-              />
+              <button
+                type="button"
+                onClick={handleUnlock}
+                disabled={unlocking || selectedIds.length === 0}
+                className="bl-cta-primary px-6 py-3 uppercase tracking-wider text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {unlocking ? "Unlocking…" : `Get My Playbooks →`}
+              </button>
             </div>
           </>
         )}
@@ -319,18 +370,9 @@ interface FieldProps {
   placeholder?: string;
   error?: string;
   type?: string;
-  hint?: string;
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  error,
-  type = "text",
-  hint,
-}: FieldProps) {
+function Field({ label, value, onChange, placeholder, error, type = "text" }: FieldProps) {
   return (
     <label className="block">
       <span className="font-mono text-[11px] uppercase tracking-wider text-text-tertiary block mb-1.5">
@@ -342,17 +384,10 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className={`w-full bg-surface-2 border px-3 py-2.5 text-text-primary text-sm focus:outline-none transition-colors rounded-xl placeholder:text-text-tertiary ${
-          error
-            ? "border-danger focus:border-danger"
-            : "border-border focus:border-accent"
+          error ? "border-danger focus:border-danger" : "border-border focus:border-accent"
         }`}
       />
-      {hint && !error && (
-        <span className="text-text-tertiary text-xs mt-1 block">{hint}</span>
-      )}
-      {error && (
-        <span className="text-danger text-xs mt-1 block">{error}</span>
-      )}
+      {error && <span className="text-danger text-xs mt-1 block">{error}</span>}
     </label>
   );
 }

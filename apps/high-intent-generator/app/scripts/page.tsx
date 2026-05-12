@@ -133,17 +133,7 @@ export default function ScriptsPage() {
               <div className="bl-glass-card p-6 md:p-8 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
                 <div>
                   <div className="bl-eyebrow mb-3">DONE-FOR-YOU</div>
-                  <h2
-                    className="text-2xl md:text-3xl mb-2"
-                    style={{
-                      fontFamily: "var(--font-serif)",
-                      fontStyle: "italic",
-                      fontWeight: 400,
-                      letterSpacing: "-0.8px",
-                      lineHeight: 1.05,
-                      color: "var(--color-text-primary)",
-                    }}
-                  >
+                  <h2 className="text-2xl md:text-3xl font-semibold text-text-primary mb-2 leading-snug">
                     Want us to run these for you?
                   </h2>
                   <p className="text-text-secondary text-sm">
